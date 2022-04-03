@@ -16,6 +16,7 @@ import adafruit_requests
 import ssl
 import ipaddress
 import random
+import adafruit_requests
 
 
 
@@ -27,12 +28,19 @@ def startWiFi():
         print("WiFi secrets are kept in secrets.py, please add them there!")
         raise
 
-    print("Connect wifi")
-    #wifi.radio.connect(secrets['ssid'],secrets['password'])
-    wifi.radio.start_ap(secrets['ssid'],secrets['password'])
-    HOST = repr(wifi.radio.ipv4_address_ap)
-    PORT = 555        # Port to listen on
-    print(HOST,PORT)
+    notConnected = True
+    while(notConnected == True):
+        try:
+            print("Connect wifi")
+            wifi.radio.connect(secrets['ssid'],secrets['password'], timeout=30)
+            notConnected = False
+            #wifi.radio.start_ap(secrets['ssid'],secrets['password'])
+            HOST = repr(wifi.radio.ipv4_address)
+            PORT = 80
+            print(HOST,PORT)
+        except ConnectionError:
+            print("No Wifi Network found, retrying in 5 sec")
+            time.sleep(5)
 
 # data format
 # byte 0: cmd byte
@@ -56,25 +64,31 @@ def startWiFi():
 # example - stop timer
 # msg = b'\xAA\xFF\xFF\xFF'
 
-def startService(s):
-    try:
-        client, remote_addr = s.accept()
-        print("Connection from ", remote_addr)
-        return client
+# def startService(s):
+#     try:
+#         client, remote_addr = s.accept()
+#         print("Connection from ", remote_addr)
+#         return client
+#
+#     except OSError as e:
+#         print("Timed Out")
+#         return()
 
-    except OSError as e:
-        print("Timed Out")
-        return()
+
+def sendStop(host):
+    stop_api_url = "http://"+host+"/api/stop"
+    print("Sending stop to: ", stop_api_url)
+    data = " "
+    requests.post(stop_api_url,data=data)
+    # cmd = b'\xAA'
+    # timer_bytes = b'\xFF\xFF\xFF'
+    # msg = cmd + timer_bytes
+    # print("Sending: ", msg)
+    # client.send(msg)
+
+def sendTimer(host, buttonNum):
 
 
-def sendStop(client):
-    cmd = b'\xAA'
-    timer_bytes = b'\xFF\xFF\xFF'
-    msg = cmd + timer_bytes
-    print("Sending: ", msg)
-    client.send(msg)
-
-def sendTimer(client, buttonNum):
     seconds = random.randint(1,300)
     if(buttonNum == 1):
         seconds = 30
@@ -84,18 +98,23 @@ def sendTimer(client, buttonNum):
         seconds = 90
     elif(buttonNum == 4):
         seconds = 5
-    timer_bytes = seconds.to_bytes(3,'big')
-    cmd = b'\x42'
-    msg = cmd + timer_bytes
-    print("Sending: ", msg)
-    client.send(msg)
 
-def sendHeartbeat(client):
-    cmd = b'\x33'
-    timer_bytes = b'\xFF\xFF\xFF'
-    msg = cmd + timer_bytes
-    print("Sending: ", msg)
-    client.send(msg)
+    timer_api_url = "http://"+host+"/api/timer/"+str(seconds)
+    print("Sending ", seconds, " second timer to: ", timer_api_url)
+    data = " "
+    requests.post(timer_api_url,data=data)
+    # timer_bytes = seconds.to_bytes(3,'big')
+    # cmd = b'\x42'
+    # msg = cmd + timer_bytes
+    # print("Sminicom -b 115200 -o -D /dev/ttyACMending: ", msg)
+    # client.send(msg)
+
+# def sendHeartbeat(client):
+#     cmd = b'\x33'
+#     timer_bytes = b'\xFF\xFF\xFF'
+#     msg = cmd + timer_bytes
+#     print("Sending: ", msg)
+#     client.send(msg)
 
 def readButtons():
     buttonNum = -1
@@ -108,29 +127,36 @@ def readButtons():
             buttonNum = i
     return(buttonNum)
 
-def mainLoop(client):
-    try:
-        recvBuffer = bytearray(100)
-        datalen = client.recv_into(recvBuffer)
-        print("Received: ", recvBuffer[:datalen])
-        command = int(recvBuffer[0])
-        cmd_bytes = command.to_bytes(1,'big')
-        print("Command: ", cmd_bytes)
-        if(cmd_bytes == b'\x55'):
-            randcmd = random.randint(0,15)
-            buttonNum = readButtons()
-            print(buttonNum)
-            if(buttonNum == 0):
-                sendStop(client)
-            elif(buttonNum > 0):
-                sendTimer(client, buttonNum)
-            else:
-                sendHeartbeat(client)
-        else:
-            print("unknown command: ", cmd_bytes)
-    except OSError as e:
-        print("Timed Out, continuing ", e)
-        return()
+def mainLoop(host):
+    buttonNum = readButtons()
+    #print(buttonNum)
+    if(buttonNum == 0):
+        sendStop(host)
+    elif(buttonNum > 0):
+        sendTimer(host, buttonNum)
+
+    # try:
+    #     recvBuffer = bytearray(100)
+    #     datalen = client.recv_into(recvBuffer)
+    #     print("Received: ", recvBuffer[:datalen])
+    #     command = int(recvBuffer[0])
+    #     cmd_bytes = command.to_bytes(1,'big')
+    #     print("Command: ", cmd_bytes)
+    #     if(cmd_bytes == b'\x55'):
+    #         randcmd = random.randint(0,15)
+    #         buttonNum = readButtons()
+    #         print(buttonNum)
+    #         if(buttonNum == 0):
+    #             sendStop(client)
+    #         elif(buttonNum > 0):
+    #             sendTimer(client, buttonNum)
+    #         else:
+    #             sendHeartbeat(client)
+    #     else:
+    #         print("unknown command: ", cmd_bytes)
+    # except OSError as e:
+    #     print("Timed Out, continuing ", e)
+    #     return()
 
 pins = (board.IO18,board.IO14,board.IO12,board.IO6,board.IO5)
 buttons = []   # will hold list of Debouncer objects
@@ -144,21 +170,11 @@ stopButton = buttons[0]
 print("Starting Wifi")
 startWiFi()
 
+host = repr(wifi.radio.ipv4_gateway)
+
 pool = socketpool.SocketPool(wifi.radio)
 requests = adafruit_requests.Session(pool, ssl.create_default_context())
-s = pool.socket(pool.AF_INET, pool.SOCK_STREAM)
-s.settimeout(None)
-s.bind(['0.0.0.0', 555])
-s.listen(1)
-
-print("Listening on port 555")
-
-notConnected = True
-while (notConnected == True):
-    client = startService(s)
-    if(client != None):
-        notConnected = False
 
 while True:
-    mainLoop(client)
-    time.sleep(1)
+    mainLoop(host)
+    time.sleep(0.1)
